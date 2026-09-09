@@ -1,0 +1,62 @@
+{
+  "name": "dsh-totp",
+  "version": "0.0.1",
+  "description": "TOTP access protection for DeepSeek Harness: enrollment, live protection controls and lock-all.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./internal-webserver": "./src/internal-webserver.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-totp": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md",
+    "README.en.md",
+    "docs/assets/cover.png",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "totp",
+    "authenticator"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
+  },
+  "scripts": {
+    "check": "node scripts/check.js",
+    "test:release": "node --test scripts/release.test.js",
+    "release": "node scripts/release.js",
+    "prepack": "npm run check"
+  },
+  "dependencies": {
+    "otpauth": "9.5.2",
+    "qrcode": "1.5.4",
+    "ws": "8.21.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-host-webserver": "0.1.2-rc.1",
+    "@deepseek-ai/schemastery": "3.18.2"
+  }
+}

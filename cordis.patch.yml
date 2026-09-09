@@ -1,0 +1,20 @@
+# The replacement enforces loopback before the first listen, even with --host.
+- id: webserver
+  disabled: true
+- id: web-runtime
+  config:
+    openBrowser: false
+    printUrl: false
+- insert:
+    - id: dsh-totp-internal-webserver
+      name: dsh-totp/internal-webserver
+      config:
+        host: '127.0.0.1'
+        port: 0
+    - id: dsh-totp
+      name: dsh-totp
+      inject: [webStartup]
+      config:
+        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        port: !!js ctx.webStartup.port ?? 3080
+        allowedHosts: !!js ctx.webStartup.trustedHosts ?? []
