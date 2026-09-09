@@ -233,26 +233,6 @@ npm pack
 
 The cover is a conceptual illustration. The architecture diagram describes this repository's implementation. After upgrading DSH, verify enrollment, login, protection controls, and locking in your target environment.
 
-## Release to GitHub
-
-Commit your code changes first so the working tree is clean. Configure your Git identity and push access to `origin`, then run:
-
-```sh
-npm run release
-```
-
-Each run increments the patch version (for example, `0.1.0` → `0.1.1`) in `package.json`, `dsh.plugin.json`, and `package-lock.json`. After the syntax check passes, it creates a `chore(release): v0.1.1` commit and an annotated `v0.1.1` tag, then **pushes the current branch and that tag together to `origin`**, including any earlier local commits on the branch.
-
-The script stops for uncommitted changes, a remote branch that is ahead or diverged, inconsistent versions, or a conflicting target tag. The push is atomic: both refs succeed or neither does. If the release commit or tag exists but the push fails, fix the error and rerun the command to resume without another version bump.
-
-Preview the next release (reads the remote and runs checks without changing versions, creating commits or tags, or pushing):
-
-```sh
-npm run release -- --dry-run
-```
-
-This command publishes Git refs only; it does not run `npm publish` or create a GitHub Release page. Run `npm run test:release` for the release script's local Git integration tests.
-
 ## License
 
 [MIT](LICENSE)

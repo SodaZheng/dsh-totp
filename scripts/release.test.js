@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const releaseSource = readFileSync(new URL('./release.js', import.meta.url), 'utf8');
 
@@ -15,6 +16,12 @@ function fixture(t, version = '0.0.1') {
   mkdirSync(join(repo, 'scripts'), { recursive: true });
   // Isolate the test repos from personal signing, hooks, and push configuration.
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(directory, 'gitconfig') };
+  const npmStateFile = join(directory, 'npm-state.json');
+  writeFileSync(npmStateFile, JSON.stringify({ versions: {}, events: [] }));
+  env.npm_execpath = fileURLToPath(new URL('./fixtures/npm-cli.js', import.meta.url));
+  env.DSH_RELEASE_TEST_NPM_STATE = npmStateFile;
+  const npmState = () => JSON.parse(readFileSync(npmStateFile, 'utf8'));
+  const setNpmState = (updates) => writeFileSync(npmStateFile, JSON.stringify({ ...npmState(), ...updates }));
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
   const command = (program, args, cwd = repo) => {
     const result = spawnSync(program, args, { cwd, env, encoding: 'utf8' });
@@ -30,9 +37,7 @@ function fixture(t, version = '0.0.1') {
   const read = (file) => readFileSync(join(repo, file), 'utf8');
   const json = (file) => JSON.parse(read(file));
   const commit = (subject) => { git('add', '.'); git('commit', '-m', subject); };
-  const release = (...args) => process.env.npm_execpath
-    ? command(process.execPath, [process.env.npm_execpath, 'run', 'release', '--', ...args])
-    : command(process.execPath, ['scripts/release.js', ...args]);
+  const release = (...args) => command(process.execPath, ['scripts/release.js', ...args]);
   const remoteRef = (ref) => git('ls-remote', remote, ref).split(/\s+/)[0];
   const versions = () => [json('package.json').version, json('dsh.plugin.json').version,
     json('package-lock.json').version, json('package-lock.json').packages[''].version];
@@ -51,10 +56,10 @@ function fixture(t, version = '0.0.1') {
   commit('Initial commit');
   git('remote', 'add', 'origin', remote);
   git('push', 'origin', 'main');
-  return { repo, remote, git, write, read, json, commit, release, remoteRef, versions };
+  return { repo, remote, git, write, read, json, commit, release, remoteRef, versions, npmState, setNpmState };
 }
 
-test('npm run release synchronizes versions and pushes an annotated tag on every successful run', (t) => {
+test('release synchronizes versions, publishes npm, and pushes annotated tags on consecutive runs', (t) => {
   const f = fixture(t, '0.1.9');
   const entry = f.json('dsh.plugin.json').entry;
   // An existing local commit and a branch without an upstream are supported.
@@ -70,6 +75,7 @@ test('npm run release synchronizes versions and pushes an annotated tag on every
     assert.equal(f.git('log', '-1', '--format=%s'), `chore(release): v${version}`);
     assert.equal(f.remoteRef('refs/heads/main'), f.git('rev-parse', 'HEAD'));
     assert.equal(f.remoteRef(`refs/tags/v${version}`), f.git('rev-parse', `v${version}`));
+    assert.equal(f.npmState().versions[version].gitHead, f.git('rev-parse', 'HEAD'));
     assert.equal(f.git('status', '--porcelain'), '');
     assert.deepEqual(f.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split('\n').sort(),
       ['dsh.plugin.json', 'package-lock.json', 'package.json']);
@@ -81,12 +87,14 @@ test('dry-run checks the release without changing files, commits, tags, or the r
   const before = f.git('rev-parse', 'HEAD');
   const result = f.release('--dry-run');
   assert.equal(result.status, 0, result.output);
-  assert.match(result.output, /0\.1\.0 → 0\.1\.1/);
+  assert.match(result.output, /0\.0\.1 → 0\.0\.2/);
   assert.deepEqual(f.versions(), Array(4).fill('0.0.1'));
   assert.equal(f.git('rev-parse', 'HEAD'), before);
   assert.equal(f.remoteRef('refs/heads/main'), before);
   assert.equal(f.git('tag'), '');
   assert.equal(f.git('status', '--porcelain'), '');
+  assert.deepEqual(f.npmState().versions, {});
+  assert.equal(f.npmState().events.some((event) => event.command === 'publish'), false);
 });
 
 test('stops for untracked, modified, or staged work without committing it', (t) => {
@@ -135,14 +143,14 @@ test('stops on detached HEAD', (t) => {
 for (const remoteTag of [false, true]) {
   test(`stops when the next tag already exists ${remoteTag ? 'remotely' : 'locally'}`, (t) => {
     const f = fixture(t);
-    f.git('tag', '-a', 'v0.1.1', '-m', 'Existing release');
+    f.git('tag', '-a', 'v0.0.2', '-m', 'Existing release');
     if (remoteTag) {
-      f.git('push', 'origin', 'v0.1.1');
-      f.git('tag', '-d', 'v0.1.1');
+      f.git('push', 'origin', 'v0.0.2');
+      f.git('tag', '-d', 'v0.0.2');
     }
     const result = f.release();
     assert.notEqual(result.status, 0);
-    assert.match(result.output, /v0\.1\.1 已存在/);
+    assert.match(result.output, /v0\.0\.2 已存在/);
     assert.deepEqual(f.versions(), Array(4).fill('0.0.1'));
   });
 }
@@ -193,7 +201,7 @@ test('a rejected commit restores the original version files and index', (t) => {
   rmSync(hook);
   const retry = f.release();
   assert.equal(retry.status, 0, retry.output);
-  assert.deepEqual(f.versions(), Array(4).fill('0.1.1'));
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
 });
 
 for (const removeTag of [false, true]) {
@@ -206,19 +214,117 @@ for (const removeTag of [false, true]) {
     const result = f.release();
     assert.notEqual(result.status, 0);
     assert.match(result.output, /再次执行 npm run release/);
-    assert.deepEqual(f.versions(), Array(4).fill('0.1.1'));
+    assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
     assert.equal(f.remoteRef('refs/heads/main'), before);
-    assert.equal(f.remoteRef('refs/tags/v0.1.1'), '');
+    assert.equal(f.remoteRef('refs/tags/v0.0.2'), '');
     const releaseHead = f.git('rev-parse', 'HEAD');
-    if (removeTag) f.git('tag', '-d', 'v0.1.1');
+    assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+    if (removeTag) f.git('tag', '-d', 'v0.0.2');
     rmSync(hook);
     const retry = f.release();
     assert.equal(retry.status, 0, retry.output);
-    assert.match(retry.output, /继续推送 v0\.1\.1/);
+    assert.match(retry.output, /继续发布 v0\.0\.2/);
     assert.equal(f.git('rev-parse', 'HEAD'), releaseHead);
-    assert.deepEqual(f.versions(), Array(4).fill('0.1.1'));
+    assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
     assert.equal(f.remoteRef('refs/heads/main'), releaseHead);
-    assert.equal(f.remoteRef('refs/tags/v0.1.1'), f.git('rev-parse', 'v0.1.1'));
-    assert.equal(f.git('tag'), 'v0.1.1');
+    assert.equal(f.remoteRef('refs/tags/v0.0.2'), f.git('rev-parse', 'v0.0.2'));
+    assert.equal(f.git('tag'), 'v0.0.2');
+    assert.equal(f.npmState().events.filter((event) => event.command === 'publish').length, 1);
   });
 }
+
+test('npm authentication failure stops before changing versions or Git refs', (t) => {
+  const f = fixture(t);
+  f.setNpmState({ failAuth: true });
+  const before = f.git('rev-parse', 'HEAD');
+  const result = f.release();
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /npm login --registry=https:\/\/registry\.npmjs\.org\//);
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.1'));
+  assert.equal(f.git('rev-parse', 'HEAD'), before);
+  assert.equal(f.git('tag'), '');
+  assert.equal(f.npmState().events.some((event) => event.command === 'publish'), false);
+});
+
+test('registry errors are not treated as an available version', (t) => {
+  const f = fixture(t);
+  f.setNpmState({ viewError: 'E503' });
+  const result = f.release();
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /npm view 失败/);
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.1'));
+  assert.equal(f.git('tag'), '');
+});
+
+test('an existing npm version stops a new release before creating a commit', (t) => {
+  const f = fixture(t);
+  f.setNpmState({ versions: { '0.0.2': { name: 'release-test', version: '0.0.2', gitHead: 'another-commit' } } });
+  const result = f.release();
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /npm 上的 release-test@0\.0\.2 已存在/);
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.1'));
+  assert.equal(f.git('tag'), '');
+});
+
+test('failed npm publication retains one release commit for retry and never pushes early', (t) => {
+  const f = fixture(t);
+  f.setNpmState({ failPublish: true });
+  const before = f.remoteRef('refs/heads/main');
+  const result = f.release('--otp=123456');
+  assert.notEqual(result.status, 0);
+  assert.equal(result.output.includes('123456'), false);
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
+  assert.deepEqual(f.npmState().versions, {});
+  assert.equal(f.remoteRef('refs/heads/main'), before);
+  assert.equal(f.remoteRef('refs/tags/v0.0.2'), '');
+  const releaseHead = f.git('rev-parse', 'HEAD');
+  f.setNpmState({ failPublish: false });
+  const retry = f.release('--otp=654321');
+  assert.equal(retry.status, 0, retry.output);
+  assert.equal(f.git('rev-parse', 'HEAD'), releaseHead);
+  assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+  assert.equal(f.remoteRef('refs/heads/main'), releaseHead);
+  assert.ok(f.npmState().events.filter((event) => event.command === 'publish').every((event) => event.hasOtp));
+});
+
+test('an ambiguous npm response is recovered without uploading or bumping again', (t) => {
+  const f = fixture(t);
+  f.setNpmState({ publishThenFail: true });
+  const before = f.remoteRef('refs/heads/main');
+  const result = f.release();
+  assert.notEqual(result.status, 0);
+  assert.equal(f.remoteRef('refs/heads/main'), before);
+  const releaseHead = f.git('rev-parse', 'HEAD');
+  assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+  f.setNpmState({ failAuth: true }); // A Git-only retry does not require npm write access.
+  const retry = f.release();
+  assert.equal(retry.status, 0, retry.output);
+  assert.equal(f.git('rev-parse', 'HEAD'), releaseHead);
+  assert.equal(f.remoteRef('refs/heads/main'), releaseHead);
+  assert.equal(f.npmState().events.filter((event) => event.command === 'publish').length, 1);
+});
+
+test('a retry rejects an npm package associated with a different Git commit', (t) => {
+  const f = fixture(t);
+  f.setNpmState({ failPublish: true });
+  const before = f.remoteRef('refs/heads/main');
+  assert.notEqual(f.release().status, 0);
+  f.setNpmState({ versions: { '0.0.2': { name: 'release-test', version: '0.0.2', gitHead: 'another-commit' } } });
+  const result = f.release();
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /无法确认为当前发布提交/);
+  assert.equal(f.remoteRef('refs/heads/main'), before);
+});
+
+test('a previous Git-only release can finish npm publication without another bump', (t) => {
+  const f = fixture(t);
+  const result = f.release();
+  assert.equal(result.status, 0, result.output);
+  const releaseHead = f.git('rev-parse', 'HEAD');
+  f.setNpmState({ versions: {}, events: [] });
+  const retry = f.release();
+  assert.equal(retry.status, 0, retry.output);
+  assert.equal(f.git('rev-parse', 'HEAD'), releaseHead);
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
+  assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+});

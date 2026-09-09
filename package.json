@@ -1,9 +1,14 @@
 {
   "name": "dsh-totp",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "TOTP access protection for DeepSeek Harness: enrollment, live protection controls and lock-all.",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public",
+    "tag": "latest"
+  },
   "engines": {
     "node": ">=24.0.0"
   },

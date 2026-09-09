@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const files = ['package.json', 'dsh.plugin.json', 'package-lock.json'];
 const remote = 'origin';
+const registry = 'https://registry.npmjs.org/';
 
-function run(command, args, { inherit = false, optional = false } = {}) {
+function run(command, args, { inherit = false, optional = false, npmNotFound = false, label } = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: 'utf8',
@@ -15,7 +16,12 @@ function run(command, args, { inherit = false, optional = false } = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     if (optional && result.status === 1) return '';
-    throw new Error(`${command} ${args.join(' ')} 失败${result.stderr?.trim() ? `：${result.stderr.trim()}` : ''}`);
+    if (npmNotFound) {
+      try {
+        if (JSON.parse(result.stdout).error?.code === 'E404') return '';
+      } catch { /* Other errors must not be mistaken for an unpublished version. */ }
+    }
+    throw new Error(`${label ?? `${command} ${args.join(' ')}`} 失败${result.stderr?.trim() ? `：${result.stderr.trim()}` : ''}`);
   }
   return result.stdout?.trim() ?? '';
 }
@@ -23,6 +29,31 @@ function run(command, args, { inherit = false, optional = false } = {}) {
 const git = (args, options) => run('git', args, options);
 const tagRef = (version) => `refs/tags/v${version}`;
 const message = (version) => `chore(release): v${version}`;
+
+function npm(args, options) {
+  if (!process.env.npm_execpath) throw new Error('请通过 npm run release 执行发布脚本。');
+  return run(process.execPath, [process.env.npm_execpath, ...args, `--registry=${registry}`], {
+    ...options,
+    // Do not include authentication arguments such as --otp in error messages.
+    label: `npm ${args[0]}`,
+  });
+}
+
+function publishedVersion(name, version) {
+  const result = npm(['view', `${name}@${version}`, '--json', '--prefer-online'], { npmNotFound: true });
+  if (!result) return null;
+  const manifest = JSON.parse(result);
+  if (manifest.name !== name || manifest.version !== version) {
+    throw new Error(`npm 返回了非预期的 ${name}@${version} 元数据，停止发布。`);
+  }
+  return manifest;
+}
+
+function requirePublishedCommit(manifest, commit) {
+  if (manifest.gitHead !== commit) {
+    throw new Error(`npm 上的 ${manifest.name}@${manifest.version} 无法确认为当前发布提交，停止以避免关联错误的 tag。`);
+  }
+}
 
 function requireCleanTree() {
   if (git(['status', '--porcelain', '--untracked-files=all'])) {
@@ -32,10 +63,11 @@ function requireCleanTree() {
 
 function release() {
   const args = process.argv.slice(2);
-  if (args.some((arg) => arg !== '--dry-run')) {
-    throw new Error('用法：npm run release [-- --dry-run]；每次自动增加一个补丁版本。');
+  if (args.some((arg) => arg !== '--dry-run' && !/^--otp=\d+$/.test(arg))) {
+    throw new Error('用法：npm run release [-- --dry-run | --otp=123456]；每次自动增加一个补丁版本。');
   }
   const dryRun = args.includes('--dry-run');
+  const otp = args.find((arg) => arg.startsWith('--otp='));
   requireCleanTree();
   const branch = git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { optional: true });
   if (!branch) throw new Error('当前处于 detached HEAD，请先切换到要发布的分支。');
@@ -45,6 +77,7 @@ function release() {
 
   const originals = files.map((file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
   const [pkg, plugin, lock] = originals.map((content) => JSON.parse(content));
+  if (pkg.private) throw new Error('package.json 标记为 private，无法发布到 npm。');
   const current = pkg.version;
   if (typeof current !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(current)) {
     throw new Error(`package.json 版本必须为 x.y.z，当前为 ${current}。`);
@@ -82,8 +115,14 @@ function release() {
   if (atReleaseCommit && remoteCurrent && remoteCurrent !== head) {
     throw new Error(`远端 v${current} 指向其他提交，请先检查 tag 冲突。`);
   }
-  const resume = atReleaseCommit && (!remoteCurrent || remoteRefs.get(branchRef) !== head);
+  const publishedCurrent = atReleaseCommit ? publishedVersion(pkg.name, current) : null;
+  const resume = atReleaseCommit && (!publishedCurrent || !remoteCurrent || remoteRefs.get(branchRef) !== head);
   const version = resume ? current : next;
+  const published = resume ? publishedCurrent : publishedVersion(pkg.name, version);
+  if (published) {
+    if (!resume) throw new Error(`npm 上的 ${pkg.name}@${version} 已存在，请先检查版本冲突。`);
+    requirePublishedCommit(published, head);
+  }
   const ref = tagRef(version);
   const localTag = git(['rev-parse', '--verify', '--quiet', ref], { optional: true });
   if (resume) {
@@ -100,14 +139,22 @@ function release() {
     throw new Error(`v${version} 已存在，停止发布以避免覆盖 tag。`);
   }
 
-  console.log(resume ? `继续推送 v${version}，不重复增加版本。` : `发布版本：${current} → ${version}`);
+  if (!published && !dryRun) {
+    try {
+      npm(['whoami']);
+    } catch {
+      throw new Error(`无法确认 npm 登录状态。请先执行 npm login --registry=${registry}，并检查网络后重试。`);
+    }
+  }
+  console.log(resume ? `继续发布 v${version}，不重复增加版本。` : `发布版本：${current} → ${version}`);
   run(process.execPath, ['scripts/check.js'], { inherit: true });
+  if (!published) npm(['pack', '--dry-run', '--ignore-scripts'], { inherit: true });
   requireCleanTree();
   if (git(['rev-parse', 'HEAD']) !== head || git(['symbolic-ref', '--short', 'HEAD']) !== branch) {
     throw new Error('检查期间 Git 分支或提交发生变化，请重新执行。');
   }
   if (dryRun) {
-    console.log(`[dry-run] 将${resume ? '续推' : '创建提交及'} v${version}，并将分支 ${branch} 与 tag 一起推送到 origin。未修改版本、提交或 tag。`);
+    console.log(`[dry-run] 将${resume ? '继续发布' : '创建提交及 tag'} v${version}，${published ? 'npm 已发布，将跳过重复上传' : `发布到 ${registry}`}，再推送分支 ${branch} 和 tag。未修改版本、提交或 tag，未上传 npm。`);
     return;
   }
 
@@ -121,7 +168,7 @@ function release() {
             lock.packages[''].version = version;
             return `${JSON.stringify(lock, null, 2)}\n`;
           })()
-          : originals[index].replace(/("version"\s*:\s*")[^"]*(")/, `$1${version}$2`);
+          : originals[index].replace(/("version"\s*:\s*")[^"]*(")/, (_, prefix, suffix) => `${prefix}${version}${suffix}`);
         writeFileSync(new URL(`../${file}`, import.meta.url), content);
       }
       git(['add', '--', ...files]);
@@ -139,11 +186,26 @@ function release() {
   try {
     if (!localTag) git(['tag', '-a', `v${version}`, '-m', message(version)], { inherit: true });
     requireCleanTree();
+    const releaseHead = git(['rev-parse', 'HEAD']);
+    if (published) {
+      console.log(`${pkg.name}@${version} 已在 npm 发布，跳过重复上传。`);
+    } else {
+      console.log(`发布 ${pkg.name}@${version} 到 ${registry}…`);
+      npm(['publish', '--access=public', '--tag=latest', '--dry-run=false', '--ignore-scripts=false',
+        ...(otp ? [otp] : [])], { inherit: true });
+      const confirmed = publishedVersion(pkg.name, version);
+      if (!confirmed) throw new Error('暂时无法从 npm 确认发布结果，请稍后重新执行 release。');
+      requirePublishedCommit(confirmed, releaseHead);
+    }
+    requireCleanTree();
+    if (git(['rev-parse', 'HEAD']) !== releaseHead || git(['symbolic-ref', '--short', 'HEAD']) !== branch) {
+      throw new Error('npm 发布期间 Git 分支或提交发生变化，停止推送。');
+    }
     git(['push', '--atomic', destination, `HEAD:${branchRef}`, `${ref}:${ref}`], { inherit: true });
   } catch (error) {
-    throw new Error(`${error.message}\n本地发布提交已保留。解决错误后再次执行 npm run release，会继续推送 v${version}。`);
+    throw new Error(`${error.message}\n本地发布提交已保留。解决错误后再次执行 npm run release，会继续发布 v${version}；已上传 npm 的版本会跳过重复上传。`);
   }
-  console.log(`已发布 v${version}：分支 ${branch} 和 tag 均已推送到 origin。`);
+  console.log(`已发布 ${pkg.name}@${version} 到 npm；分支 ${branch} 和 tag v${version} 均已推送到 origin。`);
 }
 
 try {

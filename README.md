@@ -231,26 +231,6 @@ npm pack
 
 封面是概念插画，架构图以本仓库实现为准。DSH 升级后，请在目标环境复核绑定、登录、保护开关和锁定流程。
 
-## 发布到 GitHub
-
-先提交当前代码修改，确保工作区干净，并配置好 Git 提交身份和 `origin` 的推送权限，然后执行：
-
-```sh
-npm run release
-```
-
-每次自动将补丁版本加 1（如 `0.1.0` → `0.1.1`），同步更新 `package.json`、`dsh.plugin.json` 和 `package-lock.json`。语法检查通过后，创建 `chore(release): v0.1.1` 提交和带注释的 `v0.1.1` tag，再将**当前分支及该 tag 一起推送到 `origin`**；当前分支已有的本地提交也会一起推送。
-
-工作区有未提交修改、远端分支领先或分叉、版本不一致、目标 tag 冲突时会停止。推送采用原子操作，分支和 tag 一起成功或一起失败；若提交或 tag 已生成但推送失败，处理错误后重新运行同一命令即可续推，不会重复增加版本。
-
-预览下一次发布（会读取远端并运行检查，但不修改版本、创建提交、tag 或推送）：
-
-```sh
-npm run release -- --dry-run
-```
-
-此命令仅发布 Git 分支和 tag，不执行 `npm publish`，也不创建 GitHub Release 页面。发布脚本的本地 Git 集成测试可通过 `npm run test:release` 运行。
-
 ## 许可证
 
 [MIT](LICENSE)
