@@ -18,6 +18,8 @@ switch (command) {
     const spec = args[0];
     const version = spec.slice(spec.lastIndexOf('@') + 1);
     if (!state.versions[version]) fail('E404');
+    if (state.publishedViewFailure === 'empty') break;
+    if (state.publishedViewFailure) fail(state.publishedViewFailure);
     console.log(JSON.stringify(state.versions[version]));
     break;
   }

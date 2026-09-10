@@ -321,10 +321,55 @@ test('a previous Git-only release can finish npm publication without another bum
   const result = f.release();
   assert.equal(result.status, 0, result.output);
   const releaseHead = f.git('rev-parse', 'HEAD');
+  // Older Git-only releases did not record a successful npm publication locally.
+  rmSync(join(f.repo, '.git/dsh-totp-npm-release.json'), { force: true });
   f.setNpmState({ versions: {}, events: [] });
   const retry = f.release();
   assert.equal(retry.status, 0, retry.output);
   assert.equal(f.git('rev-parse', 'HEAD'), releaseHead);
   assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
   assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+});
+
+for (const publishedViewFailure of ['E404', 'empty', 'E503']) {
+  test(`successful npm publish completes when subsequent npm view returns ${publishedViewFailure}`, (t) => {
+    const f = fixture(t);
+    f.setNpmState({ publishedViewFailure });
+    const result = f.release();
+    assert.equal(result.status, 0, result.output);
+    const releaseHead = f.git('rev-parse', 'HEAD');
+    assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+    assert.equal(f.remoteRef('refs/heads/main'), releaseHead);
+    assert.equal(f.remoteRef('refs/tags/v0.0.2'), f.git('rev-parse', 'v0.0.2'));
+    // The next run must recognize the completed release despite registry read lag.
+    const next = f.release();
+    assert.equal(next.status, 0, next.output);
+    assert.deepEqual(f.versions(), Array(4).fill('0.0.3'));
+    assert.deepEqual(Object.keys(f.npmState().versions), ['0.0.2', '0.0.3']);
+    assert.equal(f.npmState().events.filter((event) => event.command === 'publish').length, 2);
+  });
+}
+
+test('a successful npm publish survives a failed Git push and unavailable registry reads on retry', (t) => {
+  const f = fixture(t);
+  const before = f.remoteRef('refs/heads/main');
+  const hook = join(f.remote, 'hooks/update');
+  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+  chmodSync(hook, 0o755);
+  f.setNpmState({ publishedViewFailure: 'E404' });
+  const result = f.release();
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /git push/);
+  const releaseHead = f.git('rev-parse', 'HEAD');
+  assert.equal(f.npmState().versions['0.0.2'].gitHead, releaseHead);
+  assert.equal(f.remoteRef('refs/heads/main'), before);
+  assert.equal(f.git('status', '--porcelain'), '');
+  rmSync(hook);
+  f.setNpmState({ failAuth: true, viewError: 'E503' });
+  const retry = f.release();
+  assert.equal(retry.status, 0, retry.output);
+  assert.equal(f.git('rev-parse', 'HEAD'), releaseHead);
+  assert.deepEqual(f.versions(), Array(4).fill('0.0.2'));
+  assert.equal(f.remoteRef('refs/heads/main'), releaseHead);
+  assert.equal(f.npmState().events.filter((event) => event.command === 'publish').length, 1);
 });

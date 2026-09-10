@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -53,6 +54,29 @@ function requirePublishedCommit(manifest, commit) {
   if (manifest.gitHead !== commit) {
     throw new Error(`npm 上的 ${manifest.name}@${manifest.version} 无法确认为当前发布提交，停止以避免关联错误的 tag。`);
   }
+}
+
+function publicationReceiptPath() {
+  return resolve(root, git(['rev-parse', '--git-path', 'dsh-totp-npm-release.json']));
+}
+
+function publicationReceipt(name, version, commit) {
+  let receipt;
+  try {
+    receipt = JSON.parse(readFileSync(publicationReceiptPath(), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`无法读取本地 npm 发布记录：${error.message}`);
+  }
+  return receipt?.registry === registry && receipt.name === name
+    && receipt.version === version && receipt.gitHead === commit ? receipt : null;
+}
+
+function recordPublication(name, version, commit) {
+  const file = publicationReceiptPath();
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify({ registry, name, version, gitHead: commit }, null, 2)}\n`);
+  renameSync(temporary, file);
 }
 
 function requireCleanTree() {
@@ -115,7 +139,9 @@ function release() {
   if (atReleaseCommit && remoteCurrent && remoteCurrent !== head) {
     throw new Error(`远端 v${current} 指向其他提交，请先检查 tag 冲突。`);
   }
-  const publishedCurrent = atReleaseCommit ? publishedVersion(pkg.name, current) : null;
+  const publishedCurrent = atReleaseCommit
+    ? publicationReceipt(pkg.name, current, head) ?? publishedVersion(pkg.name, current)
+    : null;
   const resume = atReleaseCommit && (!publishedCurrent || !remoteCurrent || remoteRefs.get(branchRef) !== head);
   const version = resume ? current : next;
   const published = resume ? publishedCurrent : publishedVersion(pkg.name, version);
@@ -193,10 +219,10 @@ function release() {
       console.log(`发布 ${pkg.name}@${version} 到 ${registry}…`);
       npm(['publish', '--access=public', '--tag=latest', '--dry-run=false', '--ignore-scripts=false',
         ...(otp ? [otp] : [])], { inherit: true });
-      const confirmed = publishedVersion(pkg.name, version);
-      if (!confirmed) throw new Error('暂时无法从 npm 确认发布结果，请稍后重新执行 release。');
-      requirePublishedCommit(confirmed, releaseHead);
     }
+    // npm publish's successful exit is the acknowledgement. Registry reads can lag
+    // behind it; keep a local receipt so a failed Git push can resume without reads.
+    recordPublication(pkg.name, version, releaseHead);
     requireCleanTree();
     if (git(['rev-parse', 'HEAD']) !== releaseHead || git(['symbolic-ref', '--short', 'HEAD']) !== branch) {
       throw new Error('npm 发布期间 Git 分支或提交发生变化，停止推送。');
