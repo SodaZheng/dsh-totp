@@ -3,8 +3,11 @@
   disabled: true
 - id: web-runtime
   config:
+    # Cordis replaces the whole config object; preserve the other Web options.
     openBrowser: false
     printUrl: false
+    surfaceContext: true
+    trustedHosts: !!js ctx.webStartup.trustedHosts
 - insert:
     - id: dsh-totp-internal-webserver
       name: dsh-totp/internal-webserver

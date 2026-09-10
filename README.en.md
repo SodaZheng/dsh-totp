@@ -1,6 +1,6 @@
 # dsh-totp
 
-**An access-verification step for DeepSeek Harness, under your control.**
+**TOTP access control for personal DeepSeek Harness Web instances.**
 
 [简体中文](README.md) · **English**
 
@@ -31,22 +31,28 @@ The plugin's UI labels are currently Chinese. English descriptions below include
 
 ### 1. Add the plugin
 
-Once the package is published to your npm registry, install it by name:
+Install the published npm package:
 
 ```sh
 dsh plugin --profile web add dsh-totp
 ```
 
-> This source version is not yet published to the public npm registry. If installation by name reports that the package cannot be found, use the local installation below.
-
-Run these commands from this repository's directory:
+The package is available on the [public npm registry](https://www.npmjs.com/package/dsh-totp). If your mirror has not synced it yet, specify the official registry:
 
 ```sh
-npm install
+dsh plugin --profile web add dsh-totp --registry=https://registry.npmjs.org
+```
+
+To develop or check the current source, run from this repository's directory:
+
+```sh
+npm ci
 dsh plugin --profile web add "$PWD"
 ```
 
 Plugins are installed per profile. These commands target `web`; replace it with your profile name if you use another Web profile.
+
+This plugin replaces the profile's WebServer and takes over its external HTTP entry. Do not combine it with another plugin that replaces the WebServer or owns the login flow in the same profile. It ships JavaScript directly, needs no build, and has no install-time scripts. Ordinary packaging does not run tests or create enrollment data.
 
 ### 2. Start DSH
 
@@ -168,6 +174,7 @@ Login, recovery, and TOTP-protected management operations share the failure allo
 Use the plugin within these boundaries:
 
 - It provides TOTP access verification for a personal instance, not multiple user accounts, roles, or password-plus-TOTP two-factor authentication.
+- The gateway handles HTTP directly. It does not terminate TLS or adapt Origin checks for HTTPS reverse proxies; use a protected network or tunnel for remote access.
 - With protection off, anyone who can reach the address can enter DSH and use the file, command, and other capabilities available in that instance.
 - TOTP seeds are encrypted locally with AES-256-GCM and a separately stored master key. This does not defend against an attacker with host access who can read both the database and that key.
 - The internal loopback listener reduces network exposure but does not isolate local processes. The plugin is not a workspace isolation layer or an execution sandbox.
@@ -196,6 +203,8 @@ Configure the plugin in the relevant profile's `cordis.patch.yml`:
 
 Listener, port, and data-directory changes require a restart. In-page protection toggles and locking take effect immediately.
 
+DSH validates configuration through the plugin's exported `Config`. `host` accepts `127.0.0.1` or `0.0.0.0`; `port` is an integer from 0 to 65535 (0 chooses a dynamic port). `idleMs` must not exceed `maxMs`; both must be positive integers no greater than 24 hours. `allowedHosts` accepts `host[:port]` values without a scheme or path.
+
 ### Data directory
 
 The default resolves from `DSH_TOTP_DATA_DIR`, then `$DSH_HOME/dsh-totp`, then `~/.dsh/dsh-totp`. The plugin's `dataDir` configuration can override that default.
@@ -223,15 +232,22 @@ Add `--data-dir /path/to/data` when needed. The CLI and plugin must use the same
 ## Check and package from source
 
 ```sh
-npm install
-npm run check
-npm pack --dry-run
+npm ci
+npm run verify
 npm pack
 ```
 
-`check` validates JavaScript syntax only. `pack --dry-run` previews the published file list. `pack` checks syntax before creating the archive. The package includes runtime source, plugin configuration, both READMEs, the cover, and the license; local dependencies and test data are excluded.
+`check` validates JavaScript syntax and runs tests for TOTP, persistence, replay protection, rate limits, recovery, page authorization, the HTTP / WebSocket gateway, and the release script. Tests use temporary directories, loopback ports, and a simulated upstream. They do not read your DSH data or publish to npm or GitHub.
+
+`verify` runs `check` and `check:package`. The latter parses bundle YAML and validates versions, package contents, runtime entries, local imports, and client registration of the settings slot under the package name. `yaml` is a development-only dependency.
+
+`npm pack` creates the archive directly; `npm publish` runs `verify` automatically through `prepublishOnly`. The package includes runtime source, plugin configuration, READMEs, the cover and its notes, and the license; local dependencies and test data are excluded.
+
+GitHub Actions is configured to run both checks on Node.js 24 on Linux, macOS, and Windows. The automated gateway tests use a simulated DSH upstream and do not replace browser interaction checks in the target DSH environment.
 
 The cover is a conceptual illustration. The architecture diagram describes this repository's implementation. After upgrading DSH, verify enrollment, login, protection controls, and locking in your target environment.
+
+See [submission notes and review evidence](https://github.com/SodaZheng/dsh-totp/blob/main/docs/submission/README.md) for the listing entry, and the [source comparison with related plugins](https://github.com/SodaZheng/dsh-totp/blob/main/docs/plugin-conventions.md) for implementation decisions.
 
 ## License
 

@@ -1,7 +1,7 @@
 {
   "name": "dsh-totp",
   "version": "0.0.2",
-  "description": "HTTP TOTP 访问验证、扫码绑定、动态启停和一键锁定",
+  "description": "DSH Web 的纯 TOTP 访问验证，支持设置内绑定、恢复码、动态启停和锁定所有页面",
   "entry": { "name": "dsh-totp", "inject": ["webServer", "connection", "settings"] },
   "client": { "platform": "web" }
 }

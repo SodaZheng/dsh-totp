@@ -1,6 +1,6 @@
 # dsh-totp
 
-**为 DeepSeek Harness 加一道由你掌控的访问验证。**
+**为个人 DeepSeek Harness Web 实例提供 TOTP 访问验证。**
 
 **简体中文** · [English](README.en.md)
 
@@ -29,22 +29,28 @@
 
 ### 1. 添加插件
 
-发布到你使用的 npm registry 后，可以通过包名安装：
+通过已发布的 npm 包安装：
 
 ```sh
 dsh plugin --profile web add dsh-totp
 ```
 
-> 当前源码版本尚未发布到公共 npm registry。如果通过包名安装提示找不到包，请使用下面的本地安装方式。
-
-在本仓库目录执行：
+包已发布到 [公共 npm registry](https://www.npmjs.com/package/dsh-totp)。如果镜像尚未同步，可指定官方源：
 
 ```sh
-npm install
+dsh plugin --profile web add dsh-totp --registry=https://registry.npmjs.org
+```
+
+开发或检查当前源码时，在本仓库目录执行：
+
+```sh
+npm ci
 dsh plugin --profile web add "$PWD"
 ```
 
 插件按 profile 安装。上述命令添加到 `web`；如果使用其他 Web profile，请将 `web` 替换成相应名称。
+
+本插件会替换该 profile 的 WebServer，并接管对外 HTTP 入口。请勿在同一 profile 叠加其他替换 WebServer 或接管登录流程的网关插件。插件直接分发 JavaScript，无需构建，也没有安装期脚本；普通打包不会运行测试或创建绑定数据。
 
 ### 2. 启动 DSH
 
@@ -166,6 +172,7 @@ dsh --profile web --host 0.0.0.0 --port 3080 --no-open \
 此外，请按以下能力范围使用：
 
 - 这是面向个人实例的 TOTP 访问验证，不是多用户账号、角色权限或“密码 + TOTP”双因素系统。
+- 当前入口直接处理 HTTP，不提供 TLS 终止，也尚未适配 HTTPS 反向代理的 Origin 校验；远程访问应使用受保护的网络或隧道。
 - 保护关闭时，能访问地址的人可进入 DSH，并使用该实例开放的文件、命令等能力。
 - TOTP 种子在本地使用 AES-256-GCM 加密，主密钥单独保存；这无法防御已取得主机权限、能够同时读取数据库和主密钥的攻击者。
 - 内部回环监听减少网络暴露，不隔离同一主机上的本地进程。插件不提供工作区隔离或执行沙箱。
@@ -194,6 +201,8 @@ dsh --profile web --host 0.0.0.0 --port 3080 --no-open \
 
 修改监听地址、端口或数据目录需要重启；页面内的保护启停和锁定立即生效。
 
+DSH 会通过插件导出的 `Config` 校验配置。`host` 支持 `127.0.0.1` 和 `0.0.0.0`；`port` 为 0–65535 的整数（0 表示动态端口）；`idleMs` 不得大于 `maxMs`，两者为正整数且最长不超过 24 小时。`allowedHosts` 填写 `host[:port]`，不带协议或路径。
+
 ### 数据目录
 
 默认依次使用 `DSH_TOTP_DATA_DIR`、`$DSH_HOME/dsh-totp`、`~/.dsh/dsh-totp`。插件配置的 `dataDir` 可覆盖默认路径。
@@ -221,15 +230,22 @@ node src/cli.js lock
 ## 从源码检查与打包
 
 ```sh
-npm install
-npm run check
-npm pack --dry-run
+npm ci
+npm run verify
 npm pack
 ```
 
-`check` 仅检查 JavaScript 语法；`pack --dry-run` 预览发布清单；`pack` 先检查语法再生成安装包。发布内容包含运行源码、插件配置、两种语言的 README、封面和许可证，不包含本地依赖或测试数据。
+`check` 检查 JavaScript 语法，并运行 TOTP、持久化、防重放、限流、恢复、页面授权、HTTP / WebSocket 网关和发布脚本测试。测试使用临时目录、回环端口和模拟上游，不读取你的 DSH 数据，也不向 npm 或 GitHub 发布。
+
+`verify` 依次运行 `check` 和 `check:package`。后者解析 bundle YAML，校验版本、发布清单、运行入口与本地引用，并验证前端模块能按包名注册设置插槽。`yaml` 仅用于开发检查，不是运行依赖。
+
+`npm pack` 直接生成安装包；`npm publish` 通过 `prepublishOnly` 自动运行 `verify`。发布内容包含运行源码、插件配置、README、封面及说明和许可证，不包含本地依赖或测试数据。
+
+GitHub Actions 配置为在 Node.js 24 的 Linux、macOS 和 Windows 上运行这两项检查。自动测试使用模拟 DSH 上游，不能代替目标 DSH 环境的浏览器交互验证。
 
 封面是概念插画，架构图以本仓库实现为准。DSH 升级后，请在目标环境复核绑定、登录、保护开关和锁定流程。
+
+收录条目及评审证据见 [收录准备说明](https://github.com/SodaZheng/dsh-totp/blob/main/docs/submission/README.md)，实现取舍见 [同类插件源码对照](https://github.com/SodaZheng/dsh-totp/blob/main/docs/plugin-conventions.md)。
 
 ## 许可证
 

@@ -1,9 +1,17 @@
 {
   "name": "dsh-totp",
   "version": "0.0.2",
-  "description": "TOTP access protection for DeepSeek Harness: enrollment, live protection controls and lock-all.",
+  "description": "TOTP-only access control for DeepSeek Harness Web, with in-app enrollment, recovery codes, live protection controls and lock-all.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SodaZheng/dsh-totp.git"
+  },
+  "homepage": "https://github.com/SodaZheng/dsh-totp#readme",
+  "bugs": {
+    "url": "https://github.com/SodaZheng/dsh-totp/issues"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public",
@@ -51,9 +59,12 @@
   },
   "scripts": {
     "check": "node scripts/check.js",
+    "test": "node --test test/*.test.js scripts/release.test.js",
+    "check:package": "node scripts/check-package.js",
+    "verify": "npm run check && npm run check:package",
     "test:release": "node --test scripts/release.test.js",
     "release": "node scripts/release.js",
-    "prepack": "npm run check"
+    "prepublishOnly": "npm run verify"
   },
   "dependencies": {
     "otpauth": "9.5.2",
@@ -63,5 +74,8 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-host-webserver": "0.1.2-rc.1",
     "@deepseek-ai/schemastery": "3.18.2"
+  },
+  "devDependencies": {
+    "yaml": "2.9.0"
   }
 }

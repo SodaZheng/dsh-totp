@@ -59,7 +59,8 @@ export class Store {
       this.db.close(); this.key.fill(0); throw new Error('Existing TOTP state record is missing; refusing to apply fresh-install defaults');
     }
     this.db.prepare('INSERT OR IGNORE INTO state VALUES (1, ?)').run(JSON.stringify({ version: 1, enabled: false, revision: 0, generation: 0, secret: null, recovery: [], lastStep: -1 }));
-    this.read();
+    try { this.read(); }
+    catch (error) { this.db.close(); this.key.fill(0); throw error; }
   }
   seal(text) {
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.key, iv);
@@ -73,7 +74,16 @@ export class Store {
   }
   read() {
     const s = JSON.parse(this.db.prepare('SELECT data FROM state WHERE id=1').get().data);
-    if (s.version !== 1 || typeof s.enabled !== 'boolean' || !Number.isSafeInteger(s.revision) || !Number.isSafeInteger(s.generation) || !Number.isSafeInteger(s.lastStep) || !Array.isArray(s.recovery) || !(s.secret === null || typeof s.secret === 'string')) throw new Error('Invalid TOTP state; refusing access');
+    const counter = value => Number.isSafeInteger(value) && value >= 0;
+    if (!s || s.version !== 1 || typeof s.enabled !== 'boolean'
+      || !counter(s.revision) || !counter(s.generation)
+      || !Number.isSafeInteger(s.lastStep) || s.lastStep < -1
+      || !Array.isArray(s.recovery) || s.recovery.length > 10
+      || s.recovery.some(value => typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))
+      || new Set(s.recovery).size !== s.recovery.length
+      || !(s.secret === null || (typeof s.secret === 'string' && s.secret.length > 0))) {
+      throw new Error('Invalid TOTP state; refusing access');
+    }
     if (s.secret) this.unseal(s.secret);
     return s;
   }
