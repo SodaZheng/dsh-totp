@@ -1,6 +1,6 @@
 {
   "name": "dsh-totp",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "TOTP-only access control for DeepSeek Harness Web, with in-app enrollment, recovery codes, live protection controls and lock-all.",
   "type": "module",
   "license": "MIT",
