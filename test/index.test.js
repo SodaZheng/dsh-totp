@@ -25,7 +25,7 @@ test('Cordis Config fills defaults and rejects invalid settings before creating 
   assert.equal(Config({ port: 0 }).port, 0);
 });
 
-test('plugin startup authenticates locally, prints a credential-free entry and disposes its listener', { timeout: 10000 }, async t => {
+for (const settingsApi of ['legacy', 'forms', 'unavailable']) test(`plugin startup serves its entry with ${settingsApi} settings and disposes its listener`, { timeout: 10000 }, async t => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-totp-startup-'));
   const upstream = http.createServer((req, res) => {
     if (req.url === '/native-auth') {
@@ -43,16 +43,28 @@ test('plugin startup authenticates locally, prints a credential-free entry and d
   await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
   const output = [];
   t.mock.method(console, 'log', value => output.push(value));
+  let preference = 'dark';
+  const settings = settingsApi === 'legacy'
+    ? { get: name => { assert.equal(name, 'ui-theme'); return { preference }; } }
+    : { describe: options => {
+      assert.deepEqual(options, { redactSecrets: true });
+      if (settingsApi === 'unavailable') throw new Error('Theme form temporarily unavailable');
+      return [{ ns: 'unrelated', value: { preference: 'light' } }, { ns: 'ui-theme', value: { preference } }];
+    } };
   await apply({
     webServer: { host: '127.0.0.1', port: upstream.address().port, totpInternal: true },
     connection: { authenticatedUrl: url => new URL('/native-auth', url).href },
-    settings: { get: () => undefined }, logger: { info() {} },
+    settings, logger: { info() {} },
     effect: register => { dispose = register(); },
   }, { dataDir: dir, port: 0 });
   assert.equal(output.length, 1);
   assert.match(output[0], /^dsh-totp HTTP entry: http:\/\/127\.0\.0\.1:\d+\/$/);
   const entry = output[0].slice('dsh-totp HTTP entry: '.length);
-  const page = await fetch(entry); assert.equal(page.status, 200); await page.text();
+  const page = await fetch(entry); assert.equal(page.status, 200);
+  assert.ok((await page.text()).includes(`const preference="${settingsApi === 'unavailable' ? 'system' : 'dark'}"`));
+  preference = 'light';
+  const refreshed = await fetch(entry); assert.equal(refreshed.status, 200);
+  assert.ok((await refreshed.text()).includes(`const preference="${settingsApi === 'unavailable' ? 'system' : 'light'}"`));
   assert.ok(existsSync(join(dir, 'control.json')));
   await dispose(); dispose = undefined;
   assert.equal(existsSync(join(dir, 'control.json')), false);

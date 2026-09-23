@@ -23,6 +23,19 @@ export const Config = Schema.transform(Schema.object({
   return config;
 }, true);
 
+function themePreference(settings) {
+  try {
+    // DSH 0.1.7 projects live plugin config as forms instead of settings.get().
+    const value = typeof settings.describe === 'function'
+      ? settings.describe({ redactSecrets: true }).find(form => form.ns === 'ui-theme')?.value
+      : settings.get?.('ui-theme');
+    return ['light', 'dark', 'system'].includes(value?.preference) ? value.preference : 'system';
+  } catch {
+    // A cosmetic preference must not make the authentication gateway fail shut.
+    return 'system';
+  }
+}
+
 export async function apply(ctx, config = {}) {
   config = Config(config);
   if (ctx.webServer.host !== '127.0.0.1' || ctx.webServer.totpInternal !== true) throw new Error('dsh-totp requires its internal-webserver provider; refusing to start');
@@ -47,7 +60,7 @@ export async function apply(ctx, config = {}) {
     }
     if (!ready) throw new Error('DSH frontend did not become ready');
     gateway = new Gateway({ store, host: config.host || '127.0.0.1', port: config.port ?? 3080, allowedHosts: config.allowedHosts || [], upstream, authenticate,
-      idleMs: config.idleMs, maxMs: config.maxMs, theme: () => ctx.settings.get('ui-theme')?.preference || 'system' });
+      idleMs: config.idleMs, maxMs: config.maxMs, theme: () => themePreference(ctx.settings) });
     await gateway.start();
     control = new Control(store, gateway);
     await control.start();
